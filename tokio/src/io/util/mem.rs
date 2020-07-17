@@ -7,7 +7,7 @@ use bytes::{Buf, BytesMut};
 
 /// A bidirectional pipe to read and write bytes in memory.
 ///
-/// A pair of `MemStream`s are created together, and they act as a "channel"
+/// A pair of `DuplexStream`s are created together, and they act as a "channel"
 /// that can be used as in-memory IO types. Writing to one of the pairs will
 /// allow that data to be read from the other, and vice versa.
 ///
@@ -16,9 +16,7 @@ use bytes::{Buf, BytesMut};
 /// ```
 /// # async fn ex() -> std::io::Result<()> {
 /// # use tokio::io::{AsyncReadExt, AsyncWriteExt};
-/// use tokio::io::MemStream;
-///
-/// let (mut client, mut server) = MemStream::pair();
+/// let (mut client, mut server) = tokio::io::duplex();
 ///
 /// client.write_all(b"ping").await?;
 ///
@@ -34,7 +32,7 @@ use bytes::{Buf, BytesMut};
 /// # }
 /// ```
 #[derive(Debug)]
-pub struct MemStream {
+pub struct DuplexStream {
     read: Arc<Mutex<Pipe>>,
     write: Arc<Mutex<Pipe>>,
 }
@@ -57,28 +55,26 @@ struct Pipe {
     read_waker: Option<Waker>,
 }
 
-// ===== impl MemStream =====
+// ===== impl DuplexStream =====
 
-impl MemStream {
-    /// Create a new pair of `MemStream`s that act like a pair of connected sockets.
-    pub fn pair() -> (MemStream, MemStream) {
-        let one = Arc::new(Mutex::new(Pipe::new()));
-        let two = Arc::new(Mutex::new(Pipe::new()));
+/// Create a new pair of `DuplexStream`s that act like a pair of connected sockets.
+pub fn duplex() -> (DuplexStream, DuplexStream) {
+    let one = Arc::new(Mutex::new(Pipe::new()));
+    let two = Arc::new(Mutex::new(Pipe::new()));
 
-        (
-            MemStream {
-                read: one.clone(),
-                write: two.clone(),
-            },
-            MemStream {
-                read: two,
-                write: one,
-            },
-        )
-    }
+    (
+        DuplexStream {
+            read: one.clone(),
+            write: two.clone(),
+        },
+        DuplexStream {
+            read: two,
+            write: one,
+        },
+    )
 }
 
-impl AsyncRead for MemStream {
+impl AsyncRead for DuplexStream {
     fn poll_read(self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &mut [u8])
         -> Poll<std::io::Result<usize>>
     {
@@ -86,7 +82,7 @@ impl AsyncRead for MemStream {
     }
 }
 
-impl AsyncWrite for MemStream {
+impl AsyncWrite for DuplexStream {
     fn poll_write(self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &[u8])
         -> Poll<std::io::Result<usize>>
     {
@@ -106,7 +102,7 @@ impl AsyncWrite for MemStream {
     }
 }
 
-impl Drop for MemStream {
+impl Drop for DuplexStream {
     fn drop(&mut self) {
         // notify the other side of the closure
         self.write.lock().unwrap().close();

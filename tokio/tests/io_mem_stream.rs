@@ -1,11 +1,11 @@
 #![warn(rust_2018_idioms)]
 #![cfg(feature = "full")]
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt, MemStream};
+use tokio::io::{duplex, AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
 async fn ping_pong() {
-    let (mut a, mut b) = MemStream::pair();
+    let (mut a, mut b) = duplex();
 
     let mut buf = [0u8; 4];
 
@@ -20,7 +20,7 @@ async fn ping_pong() {
 
 #[tokio::test]
 async fn across_tasks() {
-    let (mut a, mut b) = MemStream::pair();
+    let (mut a, mut b) = duplex();
 
     let t1 = tokio::spawn(async move {
         a.write_all(b"ping").await.unwrap();
@@ -42,7 +42,7 @@ async fn across_tasks() {
 
 #[tokio::test]
 async fn disconnect() {
-    let (mut a, mut b) = MemStream::pair();
+    let (mut a, mut b) = duplex();
 
     let t1 = tokio::spawn(async move {
         a.write_all(b"ping").await.unwrap();
