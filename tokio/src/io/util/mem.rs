@@ -84,7 +84,13 @@ pub fn duplex(max_buf_size: usize) -> (DuplexStream, DuplexStream) {
 }
 
 impl AsyncRead for DuplexStream {
-    fn poll_read(self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &mut [u8])
+    // Previous rustc required this `self` to be `mut`, even though newer
+    // versions recognize it isn't needed to call `lock()`. So for
+    // compatibility, we include the `mut` and `allow` the lint.
+    //
+    // See https://github.com/rust-lang/rust/issues/73592
+    #[allow(unused_mut)]
+    fn poll_read(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &mut [u8])
         -> Poll<std::io::Result<usize>>
     {
         Pin::new(&mut *self.read.lock().unwrap()).poll_read(cx, buf)
@@ -92,19 +98,22 @@ impl AsyncRead for DuplexStream {
 }
 
 impl AsyncWrite for DuplexStream {
-    fn poll_write(self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &[u8])
+    #[allow(unused_mut)]
+    fn poll_write(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &[u8])
         -> Poll<std::io::Result<usize>>
     {
         Pin::new(&mut *self.write.lock().unwrap()).poll_write(cx, buf)
     }
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut task::Context<'_>)
+    #[allow(unused_mut)]
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>)
         -> Poll<std::io::Result<()>>
     {
         Pin::new(&mut *self.write.lock().unwrap()).poll_flush(cx)
     }
 
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut task::Context<'_>)
+    #[allow(unused_mut)]
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>)
         -> Poll<std::io::Result<()>>
     {
         Pin::new(&mut *self.write.lock().unwrap()).poll_shutdown(cx)
