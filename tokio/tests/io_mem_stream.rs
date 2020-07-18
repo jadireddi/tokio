@@ -5,7 +5,7 @@ use tokio::io::{duplex, AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
 async fn ping_pong() {
-    let (mut a, mut b) = duplex();
+    let (mut a, mut b) = duplex(32);
 
     let mut buf = [0u8; 4];
 
@@ -20,7 +20,7 @@ async fn ping_pong() {
 
 #[tokio::test]
 async fn across_tasks() {
-    let (mut a, mut b) = duplex();
+    let (mut a, mut b) = duplex(32);
 
     let t1 = tokio::spawn(async move {
         a.write_all(b"ping").await.unwrap();
@@ -42,7 +42,7 @@ async fn across_tasks() {
 
 #[tokio::test]
 async fn disconnect() {
-    let (mut a, mut b) = duplex();
+    let (mut a, mut b) = duplex(32);
 
     let t1 = tokio::spawn(async move {
         a.write_all(b"ping").await.unwrap();
@@ -56,6 +56,26 @@ async fn disconnect() {
 
         let n = b.read(&mut buf).await.unwrap();
         assert_eq!(n, 0);
+    });
+
+    t1.await.unwrap();
+    t2.await.unwrap();
+}
+
+#[tokio::test]
+async fn max_write_size() {
+    let (mut a, mut b) = duplex(32);
+
+    let t1 = tokio::spawn(async move {
+        let n = a.write(&[0u8; 64]).await.unwrap();
+        assert_eq!(n, 32);
+        let n = a.write(&[0u8; 64]).await.unwrap();
+        assert_eq!(n, 4);
+    });
+
+    let t2 = tokio::spawn(async move {
+        let mut buf = [0u8; 4];
+        b.read_exact(&mut buf).await.unwrap();
     });
 
     t1.await.unwrap();

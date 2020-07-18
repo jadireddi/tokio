@@ -16,7 +16,7 @@ use bytes::{Buf, BytesMut};
 /// ```
 /// # async fn ex() -> std::io::Result<()> {
 /// # use tokio::io::{AsyncReadExt, AsyncWriteExt};
-/// let (mut client, mut server) = tokio::io::duplex();
+/// let (mut client, mut server) = tokio::io::duplex(64);
 ///
 /// client.write_all(b"ping").await?;
 ///
@@ -50,17 +50,26 @@ struct Pipe {
     buffer: BytesMut,
     /// Determines if the write side has been closed.
     is_closed: bool,
+    /// The maximum amount of bytes that can be written before returning
+    /// `Poll::Pending`.
+    max_buf_size: usize,
     /// If the `read` side has been polled and is pending, this is the waker
     /// for that parked task.
     read_waker: Option<Waker>,
+    /// If the `write` side has filled the `max_buf_size` and returned
+    /// `Poll::Pending`, this is the waker for that parked task.
+    write_waker: Option<Waker>,
 }
 
 // ===== impl DuplexStream =====
 
 /// Create a new pair of `DuplexStream`s that act like a pair of connected sockets.
-pub fn duplex() -> (DuplexStream, DuplexStream) {
-    let one = Arc::new(Mutex::new(Pipe::new()));
-    let two = Arc::new(Mutex::new(Pipe::new()));
+///
+/// The `max_buf_size` argument is the maximum amount of bytes that can be
+/// written to a side before the write returns `Poll::Pending`.
+pub fn duplex(max_buf_size: usize) -> (DuplexStream, DuplexStream) {
+    let one = Arc::new(Mutex::new(Pipe::new(max_buf_size)));
+    let two = Arc::new(Mutex::new(Pipe::new(max_buf_size)));
 
     (
         DuplexStream {
@@ -112,11 +121,13 @@ impl Drop for DuplexStream {
 // ===== impl Pipe =====
 
 impl Pipe {
-    fn new() -> Self {
+    fn new(max_buf_size: usize) -> Self {
         Pipe {
             buffer: BytesMut::new(),
             is_closed: false,
+            max_buf_size,
             read_waker: None,
+            write_waker: None,
         }
     }
 
@@ -135,6 +146,13 @@ impl AsyncRead for Pipe {
         if self.buffer.has_remaining() {
             let max = self.buffer.remaining().min(buf.len());
             self.buffer.copy_to_slice(&mut buf[..max]);
+            if max > 0 {
+                // The passed `buf` might have been empty, don't wake up if
+                // no bytes have been moved.
+                if let Some(waker) = self.write_waker.take() {
+                    waker.wake();
+                }
+            }
             Poll::Ready(Ok(max))
         } else if self.is_closed {
             Poll::Ready(Ok(0))
@@ -146,17 +164,24 @@ impl AsyncRead for Pipe {
 }
 
 impl AsyncWrite for Pipe {
-    fn poll_write(mut self: Pin<&mut Self>, _: &mut task::Context<'_>, buf: &[u8])
+    fn poll_write(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &[u8])
         -> Poll<std::io::Result<usize>>
     {
         if self.is_closed {
             return Poll::Ready(Err(std::io::ErrorKind::BrokenPipe.into()));
         }
-        self.buffer.extend_from_slice(buf);
+        let avail = self.max_buf_size - self.buffer.len();
+        if avail == 0 {
+            self.write_waker = Some(cx.waker().clone());
+            return Poll::Pending;
+        }
+
+        let len = buf.len().min(avail);
+        self.buffer.extend_from_slice(&buf[..len]);
         if let Some(waker) = self.read_waker.take() {
             waker.wake();
         }
-        Poll::Ready(Ok(buf.len()))
+        Poll::Ready(Ok(len))
     }
 
     fn poll_flush(self: Pin<&mut Self>, _: &mut task::Context<'_>)
